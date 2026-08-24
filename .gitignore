@@ -1,0 +1,31 @@
+# Ignore all dot folders in the root directory
+/.*/**
+/.*/
+
+# Deploy-time symlink: created by deploy/setup.sh pointing at the active
+# deploy type's context/AGENTS.md. Not tracked — it depends on deploy type.
+/AGENTS.md
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts
+trove.egg-info/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+
+# Test artifacts
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Lock file (consumers get deps from pyproject.toml)
+uv.lock

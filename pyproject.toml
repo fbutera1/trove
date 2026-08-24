@@ -1,0 +1,67 @@
+[project]
+name = "trove"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Trove — AI second brain plugin for Hermes Agent"
+license = "MIT"
+authors = [
+    { name = "frankyboots" },
+]
+readme = "README.md"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Framework :: FastAPI",
+]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+]
+
+[project.urls]
+Homepage = "https://github.com/frankyboots/trove"
+Repository = "https://github.com/frankyboots/trove"
+Issues = "https://github.com/frankyboots/trove/issues"
+Changelog = "https://github.com/frankyboots/trove/blob/main/CHANGELOG.md"
+
+# Install mode:
+#   pip-installable, registered via the `hermes_agent.plugins` entry-point
+#   group, enabled via `plugins.enabled` in ~/.hermes/config.yaml.
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+]
+
+[project.scripts]
+# `trove` console script: `trove dashboard` launches the Nugget browser
+trove = "trove.cli:main"
+
+[project.entry-points."hermes_agent.plugins"]
+trove = "trove.plugin"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not deploy_smoke'"
+asyncio_mode = "auto"
+markers = [
+    "deploy_smoke: pre-deploy environment checks (tests/acceptance/)",
+]
+
+[tool.setuptools.packages.find]
+include = ["trove*"]
+
+[tool.setuptools.package-data]
+"trove.dashboard" = ["static/*"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

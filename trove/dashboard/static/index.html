@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trove — Nugget browser</title>
+    <style>
+        :root {
+            --bg: #f8f9fa;
+            --surface: #ffffff;
+            --text: #1a1a2e;
+            --text-muted: #6c757d;
+            --border: #dee2e6;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --accent: #f59e0b;
+            --danger: #dc2626;
+            --success: #16a34a;
+            --radius: 8px;
+            --shadow: 0 1px 3px rgba(0,0,0,.1);
+            --drawer-width: min(560px, 90vw);
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        /* ── Header ─────────────────────────────────────── */
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 20px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-inner {
+            max-width: 960px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .header h1 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .header h1 span { color: var(--primary); }
+        .search-box {
+            flex: 1 1 260px;
+            position: relative;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 8px 12px 8px 36px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: .9rem;
+            outline: none;
+            transition: border-color .15s;
+        }
+        .search-box input:focus { border-color: var(--primary); }
+        .search-box::before {
+            content: '🔍';
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: .85rem;
+            pointer-events: none;
+        }
+        .search-banner {
+            max-width: 960px;
+            margin: 8px auto 0;
+            padding: 4px 20px;
+            font-size: .82rem;
+            color: var(--text-muted);
+            display: none;
+        }
+        .search-banner.active { display: block; }
+
+        /* ── Controls ───────────────────────────────────── */
+        .controls {
+            max-width: 960px;
+            margin: 12px auto 0;
+            padding: 0 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .controls select, .controls button {
+            padding: 5px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: .82rem;
+            background: var(--surface);
+            cursor: pointer;
+        }
+        .controls select:focus { outline: 2px solid var(--primary); }
+        .controls .label {
+            font-size: .78rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+        }
+        .controls .spacer { flex: 1; }
+        .error-banner {
+            max-width: 960px;
+            margin: 8px auto 0;
+            padding: 8px 20px;
+            background: #fef2f2;
+            color: var(--danger);
+            border-radius: var(--radius);
+            font-size: .85rem;
+            display: none;
+        }
+        .error-banner.active { display: block; }
+
+        /* ── Nugget list ────────────────────────────────── */
+        .list-area {
+            max-width: 960px;
+            margin: 12px auto 0;
+            padding: 0 20px;
+            flex: 1;
+        }
+        .nugget-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: box-shadow .15s, border-color .15s;
+        }
+        .nugget-card:hover {
+            box-shadow: var(--shadow);
+            border-color: var(--primary);
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+        }
+        .card-time { font-size: .78rem; color: var(--text-muted); }
+        .card-preview {
+            font-size: .92rem;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .card-summary {
+            font-size: .82rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            font-style: italic;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .empty-state .icon { font-size: 2.5rem; margin-bottom: 8px; }
+        .load-more-btn {
+            display: block;
+            margin: 12px auto;
+            padding: 8px 24px;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius);
+            font-size: .88rem;
+            cursor: pointer;
+        }
+        .load-more-btn:hover { background: var(--primary-hover); }
+        .load-more-btn:disabled { opacity: .5; cursor: default; }
+
+        /* ── Badges ──────────────────────────────────────── */
+        .badge {
+            display: inline-block;
+            padding: 1px 7px;
+            border-radius: 4px;
+            font-size: .72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+        }
+        .badge-task { background: #dbeafe; color: #1e40af; }
+        .badge-fact { background: #d1fae5; color: #065f46; }
+        .badge-note { background: #f3f4f6; color: #374151; }
+        .badge-idea { background: #fef3c7; color: #92400e; }
+        .badge-question { background: #ede9fe; color: #5b21b6; }
+        .badge-decision { background: #fce7f3; color: #9d174d; }
+        .badge-status-captured { background: #f3f4f6; color: #6b7280; }
+        .badge-status-enriched { background: #d1fae5; color: #065f46; }
+        .badge-status-failed { background: #fef2f2; color: #991b1b; }
+        .badge-status-resolved { background: #dbeafe; color: #1e40af; }
+
+        /* ── Detail drawer ──────────────────────────────── */
+        .drawer-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.35);
+            z-index: 200;
+            display: none;
+        }
+        .drawer-overlay.active { display: block; }
+        .drawer {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: var(--drawer-width);
+            height: 100%;
+            background: var(--surface);
+            z-index: 201;
+            box-shadow: -4px 0 20px rgba(0,0,0,.15);
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform .2s ease;
+            overflow: hidden;
+        }
+        .drawer.active { transform: translateX(0); }
+        .drawer-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .drawer-header h2 { font-size: 1rem; font-weight: 700; }
+        .drawer-close {
+            background: none;
+            border: none;
+            font-size: 1.3rem;
+            cursor: pointer;
+            padding: 4px;
+            line-height: 1;
+            color: var(--text-muted);
+        }
+        .drawer-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+        }
+        .drawer-field {
+            margin-bottom: 14px;
+        }
+        .drawer-field label {
+            font-size: .75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--text-muted);
+            display: block;
+            margin-bottom: 3px;
+        }
+        .drawer-field .value {
+            font-size: .9rem;
+        }
+        .drawer-field pre {
+            background: var(--bg);
+            padding: 10px 14px;
+            border-radius: var(--radius);
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: .88rem;
+            max-height: 240px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+        }
+        .related-list { list-style: none; }
+        .related-item {
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            font-size: .85rem;
+        }
+        .related-item:hover { border-color: var(--primary); }
+        .related-item .rc {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* ── Footer ─────────────────────────────────────── */
+        .footer {
+            text-align: center;
+            padding: 16px 20px;
+            font-size: .78rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border);
+            margin-top: auto;
+        }
+
+        /* ── Responsive ──────────────────────────────────── */
+        @media (max-width: 768px) {
+            .header-inner { flex-direction: column; align-items: stretch; }
+            .search-box { flex: 1 1 auto; }
+            .controls { flex-direction: column; align-items: stretch; }
+            .controls .spacer { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-inner">
+            <h1><span>Trove</span> — Nugget browser</h1>
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Search nuggets …"
+                       aria-label="Search nuggets">
+            </div>
+        </div>
+        <div class="search-banner" id="searchBanner">
+            Search results for: <strong id="searchQueryDisplay"></strong>
+            &nbsp;·&nbsp;<a href="#" id="clearSearchLink">Show recent nuggets</a>
+        </div>
+    </header>
+
+    <!-- Controls -->
+    <div class="controls">
+        <span class="label">Filter</span>
+        <select id="filterClassification" aria-label="Filter by classification">
+            <option value="">All types</option>
+            <option value="task">Open Tasks</option>
+            <option value="fact">Facts</option>
+            <option value="note">Notes</option>
+            <option value="idea">Ideas</option>
+            <option value="question">Questions</option>
+            <option value="decision">Decisions</option>
+        </select>
+        <select id="filterStatus" aria-label="Filter by status">
+            <option value="">All statuses</option>
+            <option value="captured">Captured</option>
+            <option value="enriched">Enriched</option>
+            <option value="failed">Failed</option>
+            <option value="resolved">Resolved</option>
+        </select>
+        <select id="filterDate" aria-label="Filter by date">
+            <option value="">All time</option>
+            <option value="today">Today</option>
+            <option value="this-week">This Week</option>
+        </select>
+        <select id="filterSource" aria-label="Filter by source">
+            <option value="">All sources</option>
+            <option value="signal">Signal</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="label">Sort</span>
+        <select id="sortControl" aria-label="Sort order">
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="relevant">Most Relevant</option>
+        </select>
+    </div>
+
+    <!-- Error banner -->
+    <div class="error-banner" id="errorBanner"></div>
+
+    <!-- Nugget list -->
+    <div class="list-area" id="listArea"></div>
+
+    <!-- Detail drawer -->
+    <div class="drawer-overlay" id="drawerOverlay"></div>
+    <aside class="drawer" id="drawer" role="dialog" aria-label="Nugget detail">
+        <div class="drawer-header">
+            <h2>Nugget detail</h2>
+            <button class="drawer-close" id="drawerClose" aria-label="Close drawer">&times;</button>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+
+    <!-- Footer -->
+    <footer class="footer">
+        Read-only — capture happens over Signal
+    </footer>
+
+    <script>
+    (() => {
+        'use strict';
+
+        /* ── State ──────────────────────────────────────────── */
+        const LIMIT = 20;
+        let currentOffset = 0;
+        let currentMode = 'list';    // 'list' | 'search'
+        let currentSearchQuery = '';
+        let currentTotalCount = 0;
+        let loading = false;
+
+        /* ── DOM refs ───────────────────────────────────────── */
+        const $ = id => document.getElementById(id);
+        const searchInput     = $('searchInput');
+        const searchBanner    = $('searchBanner');
+        const searchQueryDisp = $('searchQueryDisplay');
+        const clearSearchLink = $('clearSearchLink');
+        const filterClass     = $('filterClassification');
+        const filterStatus    = $('filterStatus');
+        const filterDate      = $('filterDate');
+        const filterSource    = $('filterSource');
+        const sortControl     = $('sortControl');
+        const errorBanner     = $('errorBanner');
+        const listArea        = $('listArea');
+        const drawerOverlay   = $('drawerOverlay');
+        const drawer          = $('drawer');
+        const drawerBody      = $('drawerBody');
+        const drawerClose     = $('drawerClose');
+
+        /* ── Rendering helpers (Task 4) ─────────────────────── */
+
+        /** Format epoch seconds → local date/time string */
+        function formatTimestamp(epoch) {
+            if (!epoch) return '—';
+            const d = new Date(epoch * 1000);
+            return d.toLocaleString(undefined, {
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        }
+
+        /** Safe JSON.parse — returns fallback on null/malformed */
+        function parseJSONField(value, fallback) {
+            if (value == null || value === '') return fallback ?? null;
+            try { return JSON.parse(value); }
+            catch { return fallback ?? null; }
+        }
+
+        /** Classification badge */
+        const CLASS_LABELS = {
+            task: 'Task', fact: 'Fact', note: 'Note',
+            idea: 'Idea', question: 'Question', decision: 'Decision'
+        };
+        function badge(classification) {
+            if (!classification) return '';
+            const label = CLASS_LABELS[classification] || classification;
+            return `<span class="badge badge-${classification}">${label}</span>`;
+        }
+
+        /** Status badge */
+        const STATUS_LABELS = {
+            captured: 'Captured', enriched: 'Enriched',
+            failed: 'Failed', resolved: 'Resolved'
+        };
+        function statusBadge(status) {
+            if (!status) return '';
+            const label = STATUS_LABELS[status] || status;
+            return `<span class="badge badge-status-${status}">${label}</span>`;
+        }
+
+        /* ── Data-fetch layer (Task 3) ──────────────────────── */
+
+        function buildQuery(extra = {}) {
+            const params = new URLSearchParams();
+            const vClass = filterClass.value;
+            const vStatus = filterStatus.value;
+            const vDate = filterDate.value;
+            const vSource = filterSource.value;
+            const vSort = sortControl.value;
+
+            if (vClass)   params.set('classification', vClass);
+            if (vStatus)  params.set('status', vStatus);
+            if (vDate)    params.set('date', vDate);
+            if (vSource)  params.set('source', vSource);
+            params.set('sort', vSort);
+
+            for (const [k, v] of Object.entries(extra)) {
+                if (v !== undefined) params.set(k, v);
+            }
+            return params.toString() ? '?' + params.toString() : '';
+        }
+
+        function showError(msg) {
+            errorBanner.textContent = msg;
+            errorBanner.classList.add('active');
+        }
+        function clearError() {
+            errorBanner.classList.remove('active');
+        }
+
+        async function listNuggets(params) {
+            try {
+                const query = buildQuery(params);
+                const resp = await fetch('/api/nuggets' + query);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return await resp.json();
+            } catch (e) {
+                showError('Failed to load nuggets: ' + e.message);
+                return { count: 0, limit: LIMIT, offset: 0, items: [] };
+            }
+        }
+
+        async function searchNuggets(q, params) {
+            try {
+                const ps = new URLSearchParams();
+                ps.set('q', q || '');
+                const vClass = filterClass.value;
+                const vStatus = filterStatus.value;
+                const vSource = filterSource.value;
+                if (vClass)  ps.set('classification', vClass);
+                if (vStatus) ps.set('status', vStatus);
+                if (vSource) ps.set('source', vSource);
+                for (const [k, v] of Object.entries(params || {})) {
+                    if (v !== undefined) ps.set(k, v);
+                }
+                const resp = await fetch('/api/nuggets/search?' + ps.toString());
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return await resp.json();
+            } catch (e) {
+                showError('Search failed: ' + e.message);
+                return { query: q, count: 0, results: [] };
+            }
+        }
+
+        async function getNugget(messageId) {
+            try {
+                const resp = await fetch('/api/nuggets/' + encodeURIComponent(messageId));
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return await resp.json();
+            } catch (e) {
+                showError('Failed to load nugget detail: ' + e.message);
+                return null;
+            }
+        }
+
+        /* ── Rendering ──────────────────────────────────────── */
+
+        function renderCard(item) {
+            const card = document.createElement('div');
+            card.className = 'nugget-card';
+            card.dataset.mid = item.message_id;
+            const preview = item.raw_content || '';
+            const summary = item.summary || '';
+            card.innerHTML = `
+                <div class="card-header">
+                    ${badge(item.classification)}
+                    ${statusBadge(item.status)}
+                    <span class="card-time">${formatTimestamp(item.created_at)}</span>
+                    ${item.source ? `<span class="card-time">· ${item.source}</span>` : ''}
+                </div>
+                <div class="card-preview">${escapeHtml(preview)}</div>
+                ${summary ? `<div class="card-summary">${escapeHtml(summary)}</div>` : ''}
+            `;
+            card.addEventListener('click', () => openDrawer(item.message_id));
+            return card;
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function renderEmpty(message) {
+            listArea.innerHTML = `
+                <div class="empty-state">
+                    <div class="icon">📭</div>
+                    <p>${escapeHtml(message)}</p>
+                </div>`;
+        }
+
+        function renderLoadMore() {
+            const existing = listArea.querySelector('.load-more-btn');
+            if (existing) existing.remove();
+            if (currentOffset >= currentTotalCount) return;
+
+            const btn = document.createElement('button');
+            btn.className = 'load-more-btn';
+            btn.textContent = `Load more (${currentTotalCount - currentOffset} remaining)`;
+            btn.addEventListener('click', () => appendMore());
+            listArea.appendChild(btn);
+        }
+
+        /* ── Actions ────────────────────────────────────────── */
+
+        async function loadInitial() {
+            loading = true;
+            clearError();
+            currentOffset = 0;
+            listArea.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+
+            let data;
+            if (currentMode === 'search') {
+                data = await searchNuggets(currentSearchQuery, { limit: LIMIT });
+                currentTotalCount = data.count;
+                renderSearchResults(data);
+            } else {
+                data = await listNuggets({ limit: LIMIT, offset: 0 });
+                currentTotalCount = data.count;
+                renderListItems(data.items, false);
+            }
+            loading = false;
+        }
+
+        async function appendMore() {
+            if (loading) return;
+            loading = true;
+            renderLoadMore(); // show disabled state
+
+            if (currentMode === 'search') {
+                // For search, re-fetch with new offset (search doesn't support offset directly,
+                // so we just note: the API search endpoint doesn't paginate the same way.
+                // We load a larger limit on the initial search instead.)
+                loading = false;
+                return;
+            }
+
+            const data = await listNuggets({ limit: LIMIT, offset: currentOffset });
+            renderListItems(data.items, true);
+            loading = false;
+        }
+
+        function renderListItems(items, append) {
+            if (!append) {
+                listArea.innerHTML = '';
+            }
+            if (items.length === 0 && !append) {
+                renderEmpty(currentMode === 'search' ? 'No nuggets found' : 'No nuggets yet');
+                return;
+            }
+            for (const item of items) {
+                listArea.appendChild(renderCard(item));
+            }
+            if (!append) currentOffset = items.length;
+            else currentOffset += items.length;
+            renderLoadMore();
+        }
+
+        function renderSearchResults(data) {
+            listArea.innerHTML = '';
+            if (data.count === 0) {
+                renderEmpty('No nuggets found');
+                return;
+            }
+            for (const item of data.results) {
+                listArea.appendChild(renderCard(item));
+            }
+            currentOffset = data.results.length;
+            // No load-more for search results (single fetch)
+        }
+
+        /* ── Detail drawer ──────────────────────────────────── */
+
+        async function openDrawer(messageId) {
+            drawerOverlay.classList.add('active');
+            drawer.classList.add('active');
+            drawerBody.innerHTML = '<p style="padding:20px;color:var(--text-muted)">Loading…</p>';
+
+            const nugget = await getNugget(messageId);
+            if (!nugget) {
+                drawerBody.innerHTML = '<p style="padding:20px">Could not load detail.</p>';
+                return;
+            }
+            renderDrawer(nugget);
+        }
+
+        function renderDrawer(n) {
+            const entities = parseJSONField(n.entities, []);
+            const links = parseJSONField(n.links, []);
+            const metadata = parseJSONField(n.metadata, {});
+
+            let entitiesHtml = '';
+            if (Array.isArray(entities) && entities.length > 0) {
+                entitiesHtml = entities.map(e => `<span class="badge badge-note">${escapeHtml(e)}</span>`).join(' ');
+            } else {
+                entitiesHtml = '<span style="color:var(--text-muted)">—</span>';
+            }
+
+            let linksHtml = '';
+            if (Array.isArray(links) && links.length > 0) {
+                linksHtml = links.map(l => `<code>${escapeHtml(String(l))}</code>`).join(', ');
+            } else {
+                linksHtml = '<span style="color:var(--text-muted)">—</span>';
+            }
+
+            let metadataHtml = '<span style="color:var(--text-muted)">—</span>';
+            if (metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0) {
+                metadataHtml = '<pre style="max-height:120px;font-size:.8rem;">' +
+                    escapeHtml(JSON.stringify(metadata, null, 2)) + '</pre>';
+            }
+
+            let relatedHtml = '';
+            if (n.related && n.related.length > 0) {
+                relatedHtml = '<ul class="related-list">' +
+                    n.related.map(r => `
+                        <li class="related-item" data-mid="${r.message_id}">
+                            <div>${badge(r.classification)} <span class="card-time">${formatTimestamp(r.created_at)}</span></div>
+                            <div class="rc">${escapeHtml(r.raw_content || '')}</div>
+                        </li>`
+                    ).join('') + '</ul>';
+            } else {
+                relatedHtml = '<span style="color:var(--text-muted)">No related nuggets</span>';
+            }
+
+            drawerBody.innerHTML = `
+                <div class="drawer-field">
+                    <label>Original text</label>
+                    <pre>${escapeHtml(n.raw_content || '')}</pre>
+                </div>
+                <div class="drawer-field">
+                    <label>Timestamp</label>
+                    <div class="value">${formatTimestamp(n.created_at)}</div>
+                </div>
+                <div class="drawer-field">
+                    <label>Classification</label>
+                    <div class="value">${badge(n.classification)} ${n.classification ? escapeHtml(CLASS_LABELS[n.classification] || n.classification) : ''}</div>
+                </div>
+                <div class="drawer-field">
+                    <label>Status</label>
+                    <div class="value">${statusBadge(n.status)}</div>
+                </div>
+                ${n.summary ? `
+                <div class="drawer-field">
+                    <label>AI summary</label>
+                    <div class="value">${escapeHtml(n.summary)}</div>
+                </div>` : ''}
+                ${n.confidence != null ? `
+                <div class="drawer-field">
+                    <label>Confidence</label>
+                    <div class="value">${(n.confidence * 100).toFixed(0)}%</div>
+                </div>` : ''}
+                <div class="drawer-field">
+                    <label>Entities</label>
+                    <div class="value">${entitiesHtml}</div>
+                </div>
+                <div class="drawer-field">
+                    <label>Links</label>
+                    <div class="value">${linksHtml}</div>
+                </div>
+                <div class="drawer-field">
+                    <label>Metadata</label>
+                    <div class="value">${metadataHtml}</div>
+                </div>
+                <div class="drawer-field">
+                    <label>Related nuggets</label>
+                    <div class="value">${relatedHtml}</div>
+                </div>
+            `;
+
+            // Wire up related-item clicks
+            drawerBody.querySelectorAll('.related-item').forEach(el => {
+                el.addEventListener('click', () => openDrawer(el.dataset.mid));
+            });
+        }
+
+        function closeDrawer() {
+            drawerOverlay.classList.remove('active');
+            drawer.classList.remove('active');
+        }
+
+        /* ── Search debounce ────────────────────────────────── */
+
+        let searchTimer = null;
+        function onSearchInput() {
+            clearTimeout(searchTimer);
+            const q = searchInput.value.trim();
+            if (q.length === 0) {
+                switchMode('list', '');
+                return;
+            }
+            searchTimer = setTimeout(() => {
+                switchMode('search', q);
+            }, 350);
+        }
+
+        function switchMode(mode, query) {
+            currentMode = mode;
+            currentSearchQuery = query;
+            if (mode === 'search') {
+                searchBanner.classList.add('active');
+                searchQueryDisp.textContent = query;
+            } else {
+                searchBanner.classList.remove('active');
+                searchInput.value = '';
+            }
+            loadInitial();
+        }
+
+        /* ── Event wiring ────────────────────────────────────── */
+
+        // Search box
+        searchInput.addEventListener('input', onSearchInput);
+        clearSearchLink.addEventListener('click', e => {
+            e.preventDefault();
+            switchMode('list', '');
+        });
+
+        // Filters + sort → reload
+        [filterClass, filterStatus, filterDate, filterSource, sortControl].forEach(el => {
+            el.addEventListener('change', () => loadInitial());
+        });
+
+        // Drawer close
+        drawerClose.addEventListener('click', closeDrawer);
+        drawerOverlay.addEventListener('click', closeDrawer);
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && drawer.classList.contains('active')) closeDrawer();
+        });
+
+        /* ── Init ────────────────────────────────────────────── */
+        loadInitial();
+
+    })();
+    </script>
+</body>
+</html>
