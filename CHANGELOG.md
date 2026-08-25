@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-25
+
 ### Added
 - **Dashboard Tasks view**: the frontend now has a Nuggets view (browse,
   filter, search) and a Tasks view — open tasks ordered by due date with
@@ -89,5 +91,6 @@ every inbound Signal message as a Nugget and never forgets it.
   through schema v4: v2 adds nullable `due_at` / `assignee`, v3 drops dead
   columns, v4 normalizes composite author values to bare sender IDs.
 
-[Unreleased]: https://github.com/frankyboots/trove/compare/v0.1.0...main
+[Unreleased]: https://github.com/frankyboots/trove/compare/v0.2.0...main
+[0.2.0]: https://github.com/frankyboots/trove/releases/tag/v0.2.0
 [0.1.0]: https://github.com/frankyboots/trove/releases/tag/v0.1.0

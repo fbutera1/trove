@@ -61,7 +61,7 @@ def create_app(db_path=None):
     app = FastAPI(
         title="Trove Nugget Browser",
         description="Read-only API over trove.db for the Nugget browser dashboard.",
-        version="0.1.0",
+        version="0.2.0",
     )
 
     # Store resolved DB path in app state
