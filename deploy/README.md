@@ -6,7 +6,9 @@ skills apply to every deploy type.
 
 ```
 deploy/
-├── setup.sh                # wire a deploy type into a Hermes profile
+├── setup.sh                # wire a deploy type into a Hermes profile (+ dashboard)
+├── systemd/
+│   └── trove-dashboard.service  # user-service template (rendered by setup.sh)
 ├── solo/                   # single-operator Trove
 │   ├── context/             #   SOUL.md + AGENTS.md
 │   └── skills/              #   trove-enrich, trove-daily-digest
@@ -174,6 +176,47 @@ This discipline exists because two real incidents (a `.env` edit that
 appeared to silently revert, and a corrupted `.env` line that passed
 shell-level checks) were both caught only by re-reading the on-disk file
 with the real parser.
+
+## Dashboard (systemd user service)
+
+`setup.sh` also installs the dashboard as a systemd **user** service, in
+every mode, unless `--no-dashboard` is passed:
+
+| Artifact | What setup.sh does |
+|---|---|
+| `<profile>/.env.trove` | Generates a **trove-only** env file: the `TROVE_*` keys (with values) copied from the profile `.env`. No `SIGNAL_*` keys reach the dashboard process. |
+| `~/.config/systemd/user/trove-dashboard.service` | Renders `deploy/systemd/trove-dashboard.service` (substituting the `trove` binary, env-file path, and repo checkout), backing up any existing unit. |
+
+Setup prints the follow-up commands; it does not touch systemd itself:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now trove-dashboard
+```
+
+Notes:
+
+- **The env file is a snapshot, not a link.** After any `TROVE_*` change
+  to the profile `.env` (e.g. a new person in `TROVE_PEOPLE`), re-run
+  `./deploy/setup.sh <type>` and `systemctl --user restart
+  trove-dashboard`. This is why the dashboard's author labels track the
+  profile `.env` only after a re-run — the unit's
+  `EnvironmentFile=<profile>/.env.trove` reads the snapshot.
+- **Loopback bind (D3).** The unit runs `trove dashboard` with no
+  `--host` flag, so it binds `127.0.0.1` (the repo default). Remote
+  access: `ssh -L 9120:127.0.0.1:9120 <user>@<host>` and open
+  `http://127.0.0.1:9120` locally. Do not add `--host 0.0.0.0`.
+- **Profile auto-detection.** The env file lands in the profile that
+  owns the `.env`: `--profile <name>` if given, else
+  `profiles/<type>` or `profiles/trove-<type>`, else the profile whose
+  `.env` carries `TROVE_PEOPLE` (live deploys use `trove-agent` for
+  both deploy types), else the sole profile dir. With no detectable
+  profile, setup skips the dashboard section with a warning (the
+  link/copy parts still run).
+- **Binary resolution.** The unit prefers `<repo>/.venv/bin/trove`
+  (self-contained; user services get a minimal PATH, so the unit
+  carries no `Environment=PATH`); it falls back to `trove` on PATH
+  with a warning.
 
 ## trove-task-association
 

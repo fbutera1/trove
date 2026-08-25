@@ -18,6 +18,29 @@
 #   ./deploy/setup.sh solo --copy
 #   ./deploy/setup.sh partners --mixed
 #   HERMES_HOME=/path/to/profile ./deploy/setup.sh partners --copy
+#   ./deploy/setup.sh partners --no-dashboard
+#   ./deploy/setup.sh partners --profile trove-agent
+#
+# Dashboard (installed in every mode unless --no-dashboard):
+#   <profile>/.env.trove                             <- generated: TROVE_* keys
+#                                                        only, copied from the
+#                                                        profile's .env at setup
+#                                                        time (a snapshot — re-run
+#                                                        setup after any TROVE_*
+#                                                        change). The profile is
+#                                                        detected as: --profile
+#                                                        <name> if given, else
+#                                                        profiles/<type>,
+#                                                        profiles/trove-<type>,
+#                                                        the profile whose .env
+#                                                        carries TROVE_PEOPLE,
+#                                                        or the sole profile.
+#   ~/.config/systemd/user/trove-dashboard.service   <- rendered from
+#                                                        deploy/systemd/trove-dashboard.service
+#                                                        (loopback bind per the
+#                                                        repo default; remote
+#                                                        access via
+#                                                        `ssh -L 9120:127.0.0.1:9120`)
 #
 # Modes:
 #
@@ -69,18 +92,22 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # ── Args ──────────────────────────────────────────────────────────────────
 DEPLOY_TYPE="${1:-}"
 INSTALL_MODE="link"  # default
+INSTALL_DASHBOARD=1  # default on; --no-dashboard skips env file + unit
+PROFILE_NAME=""      # explicit profile dir name; default = auto-detect
 
-for arg in "$@"; do
-    case "$arg" in
-        solo|partners) DEPLOY_TYPE="$arg" ;;
-        --copy)        INSTALL_MODE="copy" ;;
-        --mixed)       INSTALL_MODE="mixed" ;;
-        *)             echo "Usage: $0 <solo|partners> [--copy|--mixed]" >&2; exit 1 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        solo|partners) DEPLOY_TYPE="$1"; shift ;;
+        --copy)        INSTALL_MODE="copy"; shift ;;
+        --mixed)       INSTALL_MODE="mixed"; shift ;;
+        --no-dashboard) INSTALL_DASHBOARD=0; shift ;;
+        --profile)     PROFILE_NAME="$2"; shift 2 ;;
+        *)             echo "Usage: $0 <solo|partners> [--copy|--mixed] [--no-dashboard] [--profile <name>]" >&2; exit 1 ;;
     esac
 done
 
 if [[ "$DEPLOY_TYPE" != "solo" && "$DEPLOY_TYPE" != "partners" ]]; then
-    echo "Usage: $0 <solo|partners> [--copy|--mixed]" >&2
+    echo "Usage: $0 <solo|partners> [--copy|--mixed] [--no-dashboard]" >&2
     exit 1
 fi
 
@@ -222,6 +249,132 @@ for skill_dir in "$SHARED_SKILLS_DIR"/*/; do
         copy_skill "$skill_dir" "$HERMES_HOME/skills/$skill_name"
     fi
 done
+
+# ── Dashboard: trove-only env file + systemd user unit ────────────────────
+if [[ "$INSTALL_DASHBOARD" -eq 1 ]]; then
+    echo
+    echo "Dashboard:"
+    echo "  NOTE: the profile .env is a PII file — read it only as"
+    echo "  KEY=VALUE lines on this host; values never leave the machine."
+
+    # ── Identify the profile (the gateway profile that owns the .env) ──
+    # Detection chain:
+    #   1. --profile <name>            (explicit; must exist)
+    #   2. profiles/<type>             (e.g. profiles/solo)
+    #   3. profiles/trove-<type>       (e.g. profiles/trove-partners)
+    #   4. the profile whose .env carries TROVE_PEOPLE (name-agnostic:
+    #      live deploys use `trove-agent` for both deploy types)
+    #   5. the sole profile dir
+    PROFILES_DIR="$HERMES_HOME/profiles"
+    PROFILE=""
+    if [[ -n "$PROFILE_NAME" ]]; then
+        candidate="$PROFILES_DIR/$PROFILE_NAME"
+        if [[ -d "$candidate" ]]; then
+            PROFILE="$candidate"
+        else
+            echo "  warn: --profile $PROFILE_NAME: $candidate does not exist."
+        fi
+    elif [[ -d "$PROFILES_DIR" ]]; then
+        # Candidate 1: the profile dir whose name matches the deploy type.
+        for candidate in "$PROFILES_DIR/$DEPLOY_TYPE" "$PROFILES_DIR/trove-$DEPLOY_TYPE"; do
+            if [[ -d "$candidate" ]]; then PROFILE="$candidate"; break; fi
+        done
+        # Candidate 2: the profile whose .env carries TROVE_PEOPLE.
+        if [[ -z "$PROFILE" ]]; then
+            for profile_dir in "$PROFILES_DIR"/*/; do
+                [[ -d "$profile_dir" ]] || continue
+                if grep -qE '^TROVE_PEOPLE=' "${profile_dir%/}/.env" 2>/dev/null; then
+                    PROFILE="${profile_dir%/}"; break
+                fi
+            done
+        fi
+        # Candidate 3: exactly one profile dir exists.
+        if [[ -z "$PROFILE" ]]; then
+            mapfile -t profile_dirs < <(find "$PROFILES_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+            if [[ ${#profile_dirs[@]} -eq 1 ]]; then PROFILE="${profile_dirs[0]}"; fi
+        fi
+    fi
+
+    if [[ -z "$PROFILE" ]]; then
+        echo "  warn: could not auto-detect a Hermes profile under $PROFILES_DIR"
+        echo "        (tried --profile, $DEPLOY_TYPE, trove-$DEPLOY_TYPE,"
+        echo "        TROVE_PEOPLE in any profile .env, and a sole profile)."
+        echo "        Skipping the dashboard env file + unit. Create the profile"
+        echo "        and re-run setup, or pass --profile <name>."
+    else
+        PROFILE_ENV="$PROFILE/.env"
+        DASHBOARD_ENV="$PROFILE/.env.trove"
+
+        # ── Generate the trove-only env file (TROVE_* keys only) ──
+        if [[ ! -f "$PROFILE_ENV" ]]; then
+            echo "  warn: $PROFILE_ENV not found — nothing to copy TROVE_* keys"
+            echo "        from. Creating an empty $DASHBOARD_ENV; add TROVE_*"
+            echo "        keys to $PROFILE_ENV, then re-run setup."
+            : > "$DASHBOARD_ENV"
+            echo "  new  $DASHBOARD_ENV (empty — no $PROFILE_ENV found)"
+        else
+            # Extract TROVE_* KEY=VALUE lines, write atomically (temp + mv).
+            # Back up any pre-existing file so a hand-edited .env.trove is
+            # never destroyed (same discipline as link()/copy_file()).
+            tmp_env="$(mktemp "${DASHBOARD_ENV}.tmp.XXXXXX")"
+            grep -E '^TROVE_[A-Za-z0-9_]*=' "$PROFILE_ENV" | grep -vE '^[A-Za-z0-9_]+=$' > "$tmp_env" || true
+            # (Drop empty values: an unset TROVE_PEOPLE means "no people";
+            #  an empty line in the unit's EnvironmentFile is harmless but
+            #  the key is more meaningful when it is simply absent.)
+            if [[ -f "$DASHBOARD_ENV" ]]; then
+                backup="${DASHBOARD_ENV}.pre-trove-setup.$(date +%Y%m%d-%H%M%S)"
+                echo "  backup $DASHBOARD_ENV -> $backup"
+                mv "$DASHBOARD_ENV" "$backup"
+            fi
+            mv "$tmp_env" "$DASHBOARD_ENV"
+            trove_keys="$(grep -cE '^TROVE_[A-Za-z0-9_]*=' "$DASHBOARD_ENV" 2>/dev/null || true)"
+            echo "  gen  $DASHBOARD_ENV ($trove_keys TROVE_* keys from $PROFILE_ENV)"
+        fi
+
+        # ── Render + install the systemd user unit ──
+        UNIT_TEMPLATE="$REPO_ROOT/deploy/systemd/trove-dashboard.service"
+        UNIT_PATH="$HOME/.config/systemd/user/trove-dashboard.service"
+        if [[ ! -f "$UNIT_TEMPLATE" ]]; then
+            echo "  warn: $UNIT_TEMPLATE not found — skipping unit install."
+        else
+            # trove bin: prefer the repo venv console script (self-contained;
+            # the unit has no Environment=PATH), fall back to PATH.
+            if [[ -x "$REPO_ROOT/.venv/bin/trove" ]]; then
+                TROVE_BIN="$REPO_ROOT/.venv/bin/trove"
+            else
+                TROVE_BIN="$(command -v trove || echo trove)"
+                echo "  warn: no $REPO_ROOT/.venv/bin/trove — using \`trove\` from"
+                echo "        PATH ($TROVE_BIN). User services get a minimal"
+                echo "        PATH; `uv sync` in the repo if the unit fails."
+            fi
+            mkdir -p "$HOME/.config/systemd/user"
+            rendered="$(mktemp "$HOME/.config/systemd/user/.trove-dashboard.XXXXXX")"
+            sed -e "s|__TROVE_BIN__|${TROVE_BIN}|g" \
+                -e "s|__ENV_FILE__|${DASHBOARD_ENV}|g" \
+                -e "s|__REPO__|${REPO_ROOT}|g" \
+                "$UNIT_TEMPLATE" > "$rendered"
+            if [[ -f "$UNIT_PATH" ]]; then
+                if cmp -s "$rendered" "$UNIT_PATH"; then
+                    echo "  ok   $UNIT_PATH (already up to date)"
+                else
+                    backup="${UNIT_PATH}.pre-trove-setup.$(date +%Y%m%d-%H%M%S)"
+                    echo "  backup $UNIT_PATH -> $backup (was not our render)"
+                    mv "$UNIT_PATH" "$backup"
+                    mv "$rendered" "$UNIT_PATH"
+                    echo "  inst $UNIT_PATH (from template)"
+                fi
+            else
+                mv "$rendered" "$UNIT_PATH"
+                echo "  inst $UNIT_PATH (from template)"
+            fi
+            echo "  next: systemctl --user daemon-reload && systemctl --user enable --now trove-dashboard"
+            echo "        (remote access: ssh -L 9120:127.0.0.1:9120 <user>@<host>)"
+            echo "  NOTE: .env.trove is a SNAPSHOT of the TROVE_* keys — re-run"
+            echo "        setup after ANY TROVE_* change to $PROFILE_ENV, then"
+            echo "        systemctl --user restart trove-dashboard."
+        fi
+    fi
+fi
 
 echo
 echo "Done. Restart Hermes (or /reset) for the new SOUL/AGENTS/skills to load."

@@ -276,7 +276,42 @@ trove dashboard --db-path /path/to/trove.db
 ```
 
 Browse, filter, and search Nuggets over the API (`/api/nuggets`,
-`/api/nuggets/search`, `/api/nuggets/{message_id}`). It binds to loopback only.
+`/api/nuggets/search`, `/api/nuggets/tasks`, `/api/nuggets/{message_id}`).
+The frontend has a Nuggets view (browse/filter/search) and a Tasks view
+(open tasks ordered by due date, with horizon and assignee filters — the
+UI and the agent share the `nugget_tasks` query path). It binds to
+loopback only; remote access is via an SSH tunnel:
+
+```bash
+ssh -L 9120:127.0.0.1:9120 <user>@<host>   # then open http://127.0.0.1:9120
+```
+
+### Running it as a user service
+
+`deploy/setup.sh` installs the dashboard as a systemd **user** service
+(skippable with `--no-dashboard`):
+
+- **`<profile>/.env.trove`** — a trove-only env file containing the
+  `TROVE_*` keys from the profile's `.env` (no `SIGNAL_*` exposure).
+  The unit references it via `EnvironmentFile=`, which is how the
+  dashboard resolves author labels (`TROVE_PEOPLE`) and the DB path
+  (`TROVE_DB`) in production. The file is a **snapshot**: after any
+  `TROVE_*` change to the profile `.env`, re-run `./deploy/setup.sh`
+  and `systemctl --user restart trove-dashboard`. The profile is
+  auto-detected (by deploy type, or by which profile's `.env` carries
+  `TROVE_PEOPLE`); pass `--profile <name>` to force it.
+- **`~/.config/systemd/user/trove-dashboard.service`** — rendered from
+  `deploy/systemd/trove-dashboard.service` with the `trove` binary path,
+  env-file path, and repo checkout substituted. After install:
+
+  ```bash
+  systemctl --user daemon-reload
+  systemctl --user enable --now trove-dashboard
+  ```
+
+A manual `trove dashboard` run (no unit) picks up a `.env.trove` found
+in the working directory or any parent directory; a process
+environment variable always wins over the file.
 
 ## Configuration (environment variables)
 

@@ -113,6 +113,50 @@
             letter-spacing: .03em;
         }
         .controls .spacer { flex: 1; }
+        /* ── View tabs (Nuggets / Tasks) ──────────────────── */
+        .view-tabs {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .view-tabs button {
+            padding: 5px 12px;
+            border: none;
+            background: var(--surface);
+            font-size: .82rem;
+            cursor: pointer;
+        }
+        .view-tabs button + button { border-left: 1px solid var(--border); }
+        .view-tabs button.active { background: var(--primary); color: #fff; }
+        /* View-scoped visibility: body.view-tasks toggles which controls show */
+        body.view-tasks .nuggets-only { display: none !important; }
+        .task-only { display: none; }
+        body.view-tasks .task-only { display: inline-block; }
+        body.view-tasks #searchBox { display: none; }
+        /* ── Task chips (assignee / due) ──────────────────── */
+        .card-author {
+            margin-left: auto;
+            font-size: .78rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .card-task-chips {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+        }
+        .chip {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 4px;
+            font-size: .74rem;
+            font-weight: 600;
+        }
+        .chip-assignee { background: #e0e7ff; color: #3730a3; }
+        .chip-due { background: #fef3c7; color: #92400e; }
+        .chip-due.overdue { background: #fef2f2; color: #991b1b; }
         .error-banner {
             max-width: 960px;
             margin: 8px auto 0;
@@ -323,7 +367,7 @@
     <header class="header">
         <div class="header-inner">
             <h1><span>Trove</span> — Nugget browser</h1>
-            <div class="search-box">
+            <div class="search-box" id="searchBox">
                 <input type="text" id="searchInput" placeholder="Search nuggets …"
                        aria-label="Search nuggets">
             </div>
@@ -336,8 +380,13 @@
 
     <!-- Controls -->
     <div class="controls">
-        <span class="label">Filter</span>
-        <select id="filterClassification" aria-label="Filter by classification">
+        <span class="label">View</span>
+        <div class="view-tabs" aria-label="View">
+            <button id="viewNuggets" class="active" aria-pressed="true">Nuggets</button>
+            <button id="viewTasks" aria-pressed="false">Tasks</button>
+        </div>
+        <span class="label nuggets-only">Filter</span>
+        <select id="filterClassification" class="nuggets-only" aria-label="Filter by classification">
             <option value="">All types</option>
             <option value="task">Open Tasks</option>
             <option value="fact">Facts</option>
@@ -346,25 +395,38 @@
             <option value="question">Questions</option>
             <option value="decision">Decisions</option>
         </select>
-        <select id="filterStatus" aria-label="Filter by status">
+        <select id="filterStatus" class="nuggets-only" aria-label="Filter by status">
             <option value="">All statuses</option>
             <option value="captured">Captured</option>
             <option value="enriched">Enriched</option>
             <option value="failed">Failed</option>
             <option value="resolved">Resolved</option>
         </select>
-        <select id="filterDate" aria-label="Filter by date">
+        <select id="filterDate" class="nuggets-only" aria-label="Filter by date">
             <option value="">All time</option>
             <option value="today">Today</option>
             <option value="this-week">This Week</option>
         </select>
-        <select id="filterSource" aria-label="Filter by source">
+        <select id="filterSource" class="nuggets-only" aria-label="Filter by source">
             <option value="">All sources</option>
             <option value="signal">Signal</option>
         </select>
+        <span class="label task-only">Horizon</span>
+        <select id="filterHorizon" class="task-only" aria-label="Task horizon">
+            <option value="all">All open</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Due today</option>
+            <option value="week">Next 7 days</option>
+            <option value="month">Next 30 days</option>
+            <option value="unscheduled">No due date</option>
+        </select>
+        <span class="label task-only">Assignee</span>
+        <select id="filterAssignee" class="task-only" aria-label="Filter by assignee">
+            <option value="">Anyone</option>
+        </select>
         <span class="spacer"></span>
-        <span class="label">Sort</span>
-        <select id="sortControl" aria-label="Sort order">
+        <span class="label nuggets-only">Sort</span>
+        <select id="sortControl" class="nuggets-only" aria-label="Sort order">
             <option value="newest">Newest</option>
             <option value="oldest">Oldest</option>
             <option value="relevant">Most Relevant</option>
@@ -403,6 +465,7 @@
         let currentSearchQuery = '';
         let currentTotalCount = 0;
         let loading = false;
+        let currentView = 'nuggets';   // 'nuggets' | 'tasks'
 
         /* ── DOM refs ───────────────────────────────────────── */
         const $ = id => document.getElementById(id);
@@ -421,6 +484,10 @@
         const drawer          = $('drawer');
         const drawerBody      = $('drawerBody');
         const drawerClose     = $('drawerClose');
+        const viewNuggets     = $('viewNuggets');
+        const viewTasks       = $('viewTasks');
+        const filterHorizon   = $('filterHorizon');
+        const filterAssignee  = $('filterAssignee');
 
         /* ── Rendering helpers (Task 4) ─────────────────────── */
 
@@ -461,6 +528,65 @@
             if (!status) return '';
             const label = STATUS_LABELS[status] || status;
             return `<span class="badge badge-status-${status}">${label}</span>`;
+        }
+
+        /* ── Task field helpers ────────────────────────────── */
+
+        /** Start-of-local-today in epoch seconds (matches server horizon boundaries). */
+        function todayStartEpoch() {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            return d.getTime() / 1000;
+        }
+
+        /** Short due-date label: 'Today', 'Overdue · 3d', 'Tue, Sep 1', …
+         *  The overdue/relative forms apply to OPEN tasks only — a
+         *  resolved (or otherwise closed) task with a past due date
+         *  shows a plain date, never the alarming 'Overdue' label. */
+        function formatDue(dueAt, open = true) {
+            if (dueAt == null) return null;
+            const d = new Date(dueAt * 1000);
+            const today = todayStartEpoch();
+            if (!open) {
+                return d.toLocaleDateString(undefined, {
+                    weekday: 'short', month: 'short', day: 'numeric'
+                });
+            }
+            if (dueAt < today) {
+                const days = Math.max(1, Math.round((today - dueAt) / 86400));
+                return `Overdue · ${days}d`;
+            }
+            if (dueAt < today + 86400) return 'Due today';
+            return d.toLocaleDateString(undefined, {
+                weekday: 'short', month: 'short', day: 'numeric'
+            });
+        }
+
+        /** True when an OPEN task's due date is before local midnight
+         *  (matches the server horizon boundaries). */
+        function isOverdue(dueAt, open = true) {
+            return open && dueAt != null && dueAt < todayStartEpoch();
+        }
+
+        /** Due-date chip html (task cards only). */
+        function dueChip(item) {
+            const open = item.status !== 'resolved';
+            const label = formatDue(item.due_at, open);
+            if (label == null) return '';
+            return `<span class="chip chip-due${isOverdue(item.due_at, open) ? ' overdue' : ''}">📅 ${escapeHtml(label)}</span>`;
+        }
+
+        /** Assignee chip: assignee if set, else author label ("self"). */
+        function assigneeChip(item) {
+            const name = item.assignee_display || item.author_label;
+            if (!name) return '';
+            const tag = item.assignee ? 'Assignee' : 'Author';
+            return `<span class="chip chip-assignee" title="${tag}">${escapeHtml(name)}</span>`;
+        }
+
+        /** Author display for the card header (label only, never raw ID). */
+        function authorLabel(item) {
+            return item.author_label ? escapeHtml(item.author_label) : '';
         }
 
         /* ── Data-fetch layer (Task 3) ──────────────────────── */
@@ -538,6 +664,22 @@
             }
         }
 
+        async function listTasks() {
+            try {
+                const params = new URLSearchParams();
+                const h = filterHorizon.value;
+                const a = filterAssignee.value;
+                if (h && h !== 'all') params.set('horizon', h);
+                if (a) params.set('assignee', a);
+                const resp = await fetch('/api/nuggets/tasks?' + params.toString());
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return await resp.json();
+            } catch (e) {
+                showError('Failed to load tasks: ' + e.message);
+                return { count: 0, items: [] };
+            }
+        }
+
         /* ── Rendering ──────────────────────────────────────── */
 
         function renderCard(item) {
@@ -546,13 +688,20 @@
             card.dataset.mid = item.message_id;
             const preview = item.raw_content || '';
             const summary = item.summary || '';
+            const isTask = item.classification === 'task';
+            const chips = isTask
+                ? [dueChip(item), assigneeChip(item)].filter(Boolean).join('')
+                : '';
+            const author = authorLabel(item);
             card.innerHTML = `
                 <div class="card-header">
                     ${badge(item.classification)}
                     ${statusBadge(item.status)}
                     <span class="card-time">${formatTimestamp(item.created_at)}</span>
                     ${item.source ? `<span class="card-time">· ${item.source}</span>` : ''}
+                    ${author ? `<span class="card-author">${author}</span>` : ''}
                 </div>
+                ${chips ? `<div class="card-task-chips">${chips}</div>` : ''}
                 <div class="card-preview">${escapeHtml(preview)}</div>
                 ${summary ? `<div class="card-summary">${escapeHtml(summary)}</div>` : ''}
             `;
@@ -592,6 +741,14 @@
             clearError();
             currentOffset = 0;
             listArea.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+
+            if (currentView === 'tasks') {
+                const data = await listTasks();
+                populateAssigneeFilter(data.items);
+                renderTaskItems(data.items);
+                loading = false;
+                return;
+            }
 
             let data;
             if (currentMode === 'search') {
@@ -653,6 +810,61 @@
             // No load-more for search results (single fetch)
         }
 
+        function renderTaskItems(items) {
+            listArea.innerHTML = '';
+            if (items.length === 0) {
+                renderEmpty('No open tasks');
+                return;
+            }
+            for (const item of items) {
+                listArea.appendChild(renderCard(item));
+            }
+        }
+
+        /* ── Task assignee filter population ────────────────── */
+
+        /** Rebuild the Assignee dropdown from the open-task item set.
+            Runs after each task fetch; preserves the selected value
+            when it still exists. */
+        function populateAssigneeFilter(items) {
+            const selected = filterAssignee.value;
+            const names = new Set();
+            for (const item of items) {
+                if (item.assignee) names.add(item.assignee);
+                else if (item.author_label) names.add(item.author_label);
+            }
+            filterAssignee.innerHTML = '<option value="">Anyone</option>' +
+                [...names].sort().map(n =>
+                    `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`
+                ).join('');
+            if (selected && names.has(selected)) filterAssignee.value = selected;
+        }
+
+        /* ── View switching (Nuggets / Tasks) ──────────────── */
+
+        function setView(view) {
+            if (currentView === view) return;
+            currentView = view;
+            document.body.classList.toggle('view-tasks', view === 'tasks');
+            viewNuggets.classList.toggle('active', view === 'nuggets');
+            viewNuggets.setAttribute('aria-pressed', String(view === 'nuggets'));
+            viewTasks.classList.toggle('active', view === 'tasks');
+            viewTasks.setAttribute('aria-pressed', String(view === 'tasks'));
+            if (view === 'nuggets') {
+                // Re-entering the nugget view re-runs search/list mode.
+                loadInitial();
+            } else {
+                // Search is nugget-view only — clear it on the way out.
+                if (searchInput.value !== '') {
+                    searchInput.value = '';
+                    searchBanner.classList.remove('active');
+                }
+                currentMode = 'list';
+                currentSearchQuery = '';
+                loadInitial();
+            }
+        }
+
         /* ── Detail drawer ──────────────────────────────────── */
 
         async function openDrawer(messageId) {
@@ -672,6 +884,43 @@
             const entities = parseJSONField(n.entities, []);
             const links = parseJSONField(n.links, []);
             const metadata = parseJSONField(n.metadata, {});
+            const isTask = n.classification === 'task';
+
+            let taskFieldsHtml = '';
+            if (isTask) {
+                const assigneeLine = n.assignee
+                    ? `Assigned to <strong>${escapeHtml(n.assignee)}</strong>`
+                    : 'No assignee — <strong>self</strong> (author)';
+                const authorLine = n.author_label
+                    ? `Author: <strong>${escapeHtml(n.author_label)}</strong>`
+                    : '';
+                const dueLabel = n.due_at != null
+                    ? formatDue(n.due_at, n.status !== 'resolved')
+                    : 'No due date';
+                const fullDue = n.due_at != null
+                    ? ` — ${formatTimestamp(n.due_at)}`
+                    : '';
+                taskFieldsHtml = `
+                <div class="drawer-field">
+                    <label>Assignee</label>
+                    <div class="value">${assigneeLine}</div>
+                </div>
+                <div class="drawer-field">
+                    <label>Due</label>
+                    <div class="value">${escapeHtml(dueLabel)}${escapeHtml(fullDue)}</div>
+                </div>
+                ${authorLine ? `
+                <div class="drawer-field">
+                    <label>Author</label>
+                    <div class="value">${authorLine}</div>
+                </div>` : ''}`;
+            } else if (n.author_label) {
+                taskFieldsHtml = `
+                <div class="drawer-field">
+                    <label>Author</label>
+                    <div class="value">${escapeHtml(n.author_label)}</div>
+                </div>`;
+            }
 
             let entitiesHtml = '';
             if (Array.isArray(entities) && entities.length > 0) {
@@ -723,6 +972,7 @@
                     <label>Status</label>
                     <div class="value">${statusBadge(n.status)}</div>
                 </div>
+                ${taskFieldsHtml}
                 ${n.summary ? `
                 <div class="drawer-field">
                     <label>AI summary</label>
@@ -799,10 +1049,20 @@
             switchMode('list', '');
         });
 
-        // Filters + sort → reload
+        // Filters + sort → reload (nugget-view controls; horizon/assignee
+        // are task-view and only act when currentView === 'tasks')
         [filterClass, filterStatus, filterDate, filterSource, sortControl].forEach(el => {
             el.addEventListener('change', () => loadInitial());
         });
+        [filterHorizon, filterAssignee].forEach(el => {
+            el.addEventListener('change', () => {
+                if (currentView === 'tasks') loadInitial();
+            });
+        });
+
+        // View tabs
+        viewNuggets.addEventListener('click', () => setView('nuggets'));
+        viewTasks.addEventListener('click', () => setView('tasks'));
 
         // Drawer close
         drawerClose.addEventListener('click', closeDrawer);

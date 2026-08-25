@@ -492,3 +492,182 @@ class TestT45_AuthorLabel:
         for r in data["results"]:
             assert r["author"] == self.DASH_UUID
             assert r["author_label"] == "Jami"
+
+
+# ── T61: GET /api/nuggets/tasks enumerates open tasks ─────────────────
+
+
+def _enrich_task(db_path, mid, due_at=None, assignee=None, status="enriched"):
+    """Helper: enrich a captured row as a task with optional due/assignee."""
+    from trove.tools import nugget_enrich
+
+    nugget_enrich(
+        mid,
+        classification="task",
+        entities=["task fixture"],
+        summary="task fixture summary",
+        status=status,
+        due_at=due_at,
+        assignee=assignee,
+        db_path=db_path,
+    )
+
+
+class TestT61_TasksEndpoint:
+    """T61 — GET /api/nuggets/tasks reuses the nugget_tasks query path:
+    open = classification='task' AND status != 'resolved', ordered by
+    due_at ASC NULLS LAST, with author_label/assignee_display resolved
+    via TROVE_PEOPLE (the UI and the agent share one query path)."""
+
+    TASK_UUID = "00000000-0000-4000-8000-000000000088"
+
+    def _seed(self, db_path, monkeypatch):
+        monkeypatch.setenv("TROVE_PEOPLE", self.TASK_UUID + ":Jami")
+        mids = {}
+        # Overdue task, no assignee (self → assignee_display = author label)
+        mids["overdue"] = insert_captured_nugget(
+            db_path, text="overdue task", author=self.TASK_UUID
+        )
+        _enrich_task(
+            db_path, mids["overdue"],
+            due_at=time.time() - 2 * 86400,
+        )
+        # Future task with an explicit assignee
+        mids["future"] = insert_captured_nugget(
+            db_path, text="future task", author=self.TASK_UUID
+        )
+        _enrich_task(
+            db_path, mids["future"],
+            due_at=time.time() + 86400, assignee="Sam",
+        )
+        # Unscheduled task
+        mids["unscheduled"] = insert_captured_nugget(
+            db_path, text="unscheduled task", author=self.TASK_UUID
+        )
+        _enrich_task(db_path, mids["unscheduled"])
+        # Resolved task — must NOT appear in the open set
+        mids["resolved"] = insert_captured_nugget(
+            db_path, text="resolved task", author=self.TASK_UUID
+        )
+        _enrich_task(
+            db_path, mids["resolved"],
+            due_at=time.time() + 86400, status="resolved",
+        )
+        # Non-task row — must NOT appear
+        mids["fact"] = insert_captured_nugget(
+            db_path, text="a fact, not a task", author=self.TASK_UUID
+        )
+        from trove.tools import nugget_enrich
+
+        nugget_enrich(
+            mids["fact"], classification="fact",
+            entities=["fact fixture"], summary="fact fixture",
+            status="enriched", db_path=db_path,
+        )
+        return mids
+
+    def test_open_tasks_ordered_by_due_nulls_last(self, dashboard_db, monkeypatch):
+        """Open set excludes resolved tasks and non-tasks; order is
+        due_at ASC with NULLs last."""
+        client, db_path = dashboard_db
+        mids = self._seed(db_path, monkeypatch)
+
+        resp = client.get("/api/nuggets/tasks")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Envelope shape
+        assert data["horizon"] == "all"
+        assert data["assignee"] is None
+        assert data["count"] == 3
+        assert len(data["items"]) == 3
+
+        ids = [i["message_id"] for i in data["items"]]
+        assert ids == [
+            mids["overdue"], mids["future"], mids["unscheduled"]
+        ]
+        assert mids["resolved"] not in ids
+        assert mids["fact"] not in ids
+
+        # Name resolution on every item
+        for item in data["items"]:
+            assert item["author_label"] == "Jami"
+        by_id = {i["message_id"]: i for i in data["items"]}
+        assert by_id[mids["future"]]["assignee_display"] == "Sam"
+        # Self task: assignee null → falls back to the author label
+        assert by_id[mids["overdue"]]["assignee_display"] == "Jami"
+
+    def test_horizon_filters(self, dashboard_db, monkeypatch):
+        """horizon=overdue/today/unscheduled slice the open set correctly."""
+        client, db_path = dashboard_db
+        mids = self._seed(db_path, monkeypatch)
+
+        resp = client.get("/api/nuggets/tasks?horizon=overdue")
+        assert resp.status_code == 200
+        ids = [i["message_id"] for i in resp.json()["items"]]
+        assert ids == [mids["overdue"]]
+
+        # No task is due today in this seed → empty
+        resp = client.get("/api/nuggets/tasks?horizon=today")
+        assert resp.status_code == 200
+        assert resp.json()["items"] == []
+
+        resp = client.get("/api/nuggets/tasks?horizon=unscheduled")
+        ids = [i["message_id"] for i in resp.json()["items"]]
+        assert ids == [mids["unscheduled"]]
+
+    def test_horizon_today_window(self, dashboard_db, monkeypatch):
+        """A task due at local noon is in horizon=today but not overdue."""
+        client, db_path = dashboard_db
+        monkeypatch.setenv("TROVE_PEOPLE", self.TASK_UUID + ":Jami")
+        from datetime import datetime
+
+        mid = insert_captured_nugget(
+            db_path, text="due at noon task", author=self.TASK_UUID
+        )
+        _enrich_task(
+            db_path, mid,
+            due_at=datetime.now().replace(
+                hour=12, minute=0, second=0, microsecond=0
+            ).timestamp(),
+        )
+
+        ids_today = [
+            i["message_id"]
+            for i in client.get("/api/nuggets/tasks?horizon=today").json()["items"]
+        ]
+        assert ids_today == [mid]
+
+        ids_overdue = [
+            i["message_id"]
+            for i in client.get("/api/nuggets/tasks?horizon=overdue").json()["items"]
+        ]
+        assert mid not in ids_overdue
+
+    def test_assignee_filter(self, dashboard_db, monkeypatch):
+        """assignee= filters exact-match on the stored assignee name."""
+        client, db_path = dashboard_db
+        mids = self._seed(db_path, monkeypatch)
+
+        resp = client.get("/api/nuggets/tasks?assignee=Sam")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["assignee"] == "Sam"
+        ids = [i["message_id"] for i in data["items"]]
+        assert ids == [mids["future"]]
+
+        # Nobody is assigned "Alex" → empty
+        resp = client.get("/api/nuggets/tasks?assignee=Alex")
+        assert resp.status_code == 200
+        assert resp.json()["items"] == []
+
+    def test_unknown_horizon_falls_back_to_all(self, dashboard_db, monkeypatch):
+        """Defensive: an unknown horizon value returns the full open set
+        (mirrors the tool's behavior) rather than erroring."""
+        client, db_path = dashboard_db
+        mids = self._seed(db_path, monkeypatch)
+
+        resp = client.get("/api/nuggets/tasks?horizon=bogus")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 3

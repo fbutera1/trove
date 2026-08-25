@@ -211,6 +211,53 @@ def create_app(db_path=None):
             "results": results,
         }
 
+    # ── GET /api/nuggets/tasks ────────────────────────────────────
+    # NOTE: Must be defined BEFORE /api/nuggets/{message_id} so that
+    # the literal path "/tasks" is matched before the catch-all param.
+
+    @app.get("/api/nuggets/tasks")
+    def list_tasks(
+        horizon: str = "all",
+        assignee: Optional[str] = None,
+        limit: int = 200,
+        _db_path: Path = Depends(get_db_path),
+    ):
+        """Enumerate open tasks, reusing the `nugget_tasks` tool path.
+
+        Mirrors the search endpoint: "the UI and the agent share one
+        query path". Open = classification='task', status !=
+        'resolved'; ordered by due_at ASC NULLS LAST; author/assignee
+        names resolved via TROVE_PEOPLE (author_label, assignee_display).
+
+        The existing list/search endpoints cannot compose this view:
+        status is a single-value filter (open spans captured/enriched/
+        failed), and there is no due-date ordering.
+
+        Query params:
+          horizon: 'overdue'|'today'|'week'|'month'|'unscheduled'|'all'.
+          assignee: Exact assignee display-name filter (None = no filter).
+          limit: Max results (clamped 1–500 by the tool, default 200).
+
+        Returns:
+          {"horizon": str, "assignee": Optional[str], "count": int,
+           "items": [dict…]}
+        """
+        from trove.tools import nugget_tasks as _nugget_tasks
+
+        items = _nugget_tasks(
+            horizon=horizon,
+            assignee=assignee,
+            limit=limit,
+            db_path=_db_path,
+        )
+
+        return {
+            "horizon": horizon,
+            "assignee": assignee,
+            "count": len(items),
+            "items": items,
+        }
+
     # ── GET /api/nuggets/{message_id} ──────────────────────────────
 
     @app.get("/api/nuggets/{message_id}")

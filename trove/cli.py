@@ -65,8 +65,22 @@ def main(argv=None) -> int:
 
 
 def _run_dashboard(args) -> int:
-    """Start the dashboard server."""
+    """Start the dashboard server.
+
+    Loads the trove-only env file (``.env.trove``) first, when present:
+    the dashboard service runs with no Hermes env wiring, so
+    ``TROVE_PEOPLE`` / ``TROVE_DB`` arrive via the systemd unit's
+    ``EnvironmentFile`` in production and via this loader on a manual
+    ``trove dashboard`` run. Explicit process env always wins over the
+    file; a missing file is a no-op.
+    """
     from trove.db import get_trove_db_path
+    from trove.env import load_trove_env_file
+
+    loaded = load_trove_env_file()
+    if loaded is not None:
+        logger = logging.getLogger("trove.cli")
+        logger.info("Loaded trove env from %s", loaded)
 
     db_path = args.db_path if args.db_path else get_trove_db_path()
 
